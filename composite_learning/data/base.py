@@ -6,7 +6,10 @@ import torch
 
 
 @dataclass
-class Base(abc.ABC):
+class BaseDataLoader(abc.ABC):
+    """
+    Abstract base class for data modules. 
+    """
     batch_size: int
 
     @abc.abstractmethod

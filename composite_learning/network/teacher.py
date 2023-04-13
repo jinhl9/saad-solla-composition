@@ -3,7 +3,7 @@ from dataclasses import dataclass
 import torch
 import torch.nn as nn
 
-import base
+from network import base, utils
 
 
 @dataclass
@@ -19,7 +19,7 @@ class BaseTeacher(base.BaseNetwork):
 class ContinuousTeacher(BaseTeacher):
 
     def _construct_output_layer(self):
-        self._head = nn.Identity
+        self._head = nn.Identity()
 
     def _get_output_from_head(self, x: torch.Tensor) -> torch.Tensor:
         return self._head(x)
@@ -29,7 +29,7 @@ class ContinuousTeacher(BaseTeacher):
 class BinaryTeacher(BaseTeacher):
 
     def _construct_output_layer(self):
-        self._head = torch.heaviside
+        self._head = utils.heaviside
 
     def _get_output_from_head(self, x: torch.Tensor) -> torch.Tensor:
         return self._head(x)
@@ -39,7 +39,18 @@ class BinaryTeacher(BaseTeacher):
 class TwoHeadsTeacher(BaseTeacher):
 
     def _construct_output_layer(self):
-        self._binary_head = torch.heaviside
+        self._binary_head = utils.heaviside
+        self._continuous_head = nn.Identity()
+
+    def _get_output_from_head(self, x: torch.Tensor) -> torch.Tensor:
+        return self._binary_head(x), self._continuous_head(x)
+
+
+@dataclass
+class TwoModulesTeacher(BaseTeacher):
+
+    def _construct_output_layer(self):
+        self._binary_head = utils.heaviside
         self._continuous_head = nn.Identity
 
     def _get_output_from_head(self, x: torch.Tensor) -> torch.Tensor:
