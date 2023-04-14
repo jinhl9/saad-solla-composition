@@ -23,11 +23,13 @@ class TeacherStudentBaseSolver(base.BaseSolver):
 
     def __post_init__(self):
         self._rejection_func = None
+        self._train = False
 
     def _setup_history(self):
         self.history = {'loss': []}
 
     def _setup_train(self):
+        self._train = True
         self._setup_history()
         if self.optimizer_type == "sgd":
             self.optimizer = torch.optim.SGD(
@@ -47,16 +49,11 @@ class TeacherStudentBaseSolver(base.BaseSolver):
 
     def _step(self, x: torch.Tensor) -> torch.Tensor:
         self.optimizer.zero_grad()
-        with torch.no_grad():
-            teacher_outputs = self.teacher_network.forward(x)
-            if self._rejection_func is not None:
-                x = self._rejection_func(x, teacher_outputs)
-                if x is None:
-                    return None
-
-        teacher_outputs = self.teacher_network.forward(x)
-        student_output = self.student_network.forward(x)
-        teacher_y = self._compose_teacher_y(teacher_outputs)
+        x = self._get_valid_batch(x, self._rejection_func)
+        if x is None:
+            return None
+        teacher_output, student_output = self.inference(x, self._rejection_func)
+        teacher_y = self._compose_teacher_y(teacher_output)
         student_y = self._compose_student_y(student_output)
         loss = self.criterion(teacher_y, student_y)
         loss.sum().backward()
@@ -67,6 +64,30 @@ class TeacherStudentBaseSolver(base.BaseSolver):
                              true=teacher_y.detach())
 
         return loss
+
+    def _get_valid_batch(self, x: torch.Tensor,
+                         rejection_func: Union[Callable, None]) -> torch.Tensor:
+        with torch.no_grad():
+            teacher_output = self.teacher_network.forward(x)
+            if rejection_func is not None:
+                x = rejection_func(x, teacher_output)
+                if x is None:
+                    return None
+                return x
+        return x
+
+    def inference(self, x: torch.Tensor,
+                  rejection_func: Union[Callable, None]) -> torch.Tensor:
+        x = self._get_valid_batch(x, rejection_func)
+        if x is None:
+            return None
+        if not self._train:
+            with torch.no_grad():
+                return self.teacher_network.forward(
+                    x), self.student_network.forward(x)
+        else:
+            return self.teacher_network.forward(
+                x), self.student_network.forward(x)
 
     def train(self, data_loader: data.BaseDataLoader, num_iter: int,
               rejection_func: Callable) -> torch.Tensor:
@@ -86,7 +107,7 @@ class TeacherStudentBaseSolver(base.BaseSolver):
                 self._history_update(loss='invalid_batch',
                                      prediction='invalid_batch',
                                      true='invalid_batch')
-
+        self._train = False
         #self.logger.info(f'Iter: {i}\tLoss: {loss:.5f}')
 
 

@@ -28,6 +28,10 @@ class BaseSolver(abc.ABC):
         return NotImplementedError()
 
     @abc.abstractmethod
+    def inference(self, **kwargs):
+        return NotImplementedError
+
+    @abc.abstractmethod
     def train(self, **kwargs):
         return NotImplementedError()
 
