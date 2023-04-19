@@ -2,6 +2,7 @@ import abc
 from dataclasses import dataclass, field
 from typing import List
 from typing import Callable
+from typing import Union
 import math
 import torch
 import torch.nn as nn
@@ -88,6 +89,52 @@ class BaseEnsemble(abc.ABC):
     @abc.abstractmethod
     def _process_input(self, x, **kwargs):
         return NotImplementedError
+
+    @property
+    def _networks(self):
+        return self.networks
+
+    def parameters(self):
+        params_list = []
+        for net in self.networks:
+            params_list += list(net.parameters())
+        return params_list
+
+    @property
+    def names(self):
+        return [network.name for network in self.networks]
+
+    @property
+    def num_networks(self):
+        return len(self._networks)
+
+    def _forward(self, network_index: int, x: torch.Tensor,
+                 **kwargs) -> torch.Tensor:
+        x = self._process_input(x, **kwargs)
+        return self._networks[network_index](x)
+
+    def forward(self, x: torch.Tensor, **kwargs) -> List[torch.Tensor]:
+        return [self._forward(i, x, **kwargs) for i in range(self.num_networks)]
+
+
+@dataclass(eq=False)
+class SharedEnsembleBase(abc.ABC):
+    networks: List[Union[List[BaseNetwork], BaseNetwork]]
+    shared_dimensions: List[int]
+
+    def __post_init__(self):
+        for network_index, shared_d in enumerate(self.shared_dimensions):
+            if shared_d != 0:
+                _hidden_size = self.networks[network_index][
+                    0].hidden_dimensions[0]
+                self._shared_weights = nn.Linear(shared_d, _hidden_size)
+                for net in self.networks[network_index]:
+                    net.layers[
+                        0].weight.data[:, :
+                                       shared_d] = self._shared_weights.weight.data
+        self.networks = [
+            net for net_group in self.networks for net in net_group
+        ]
 
     @property
     def _networks(self):
