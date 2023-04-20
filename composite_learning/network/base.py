@@ -3,9 +3,11 @@ from dataclasses import dataclass, field
 from typing import List
 from typing import Callable
 from typing import Union
+from typing import Optional
 import math
 import torch
 import torch.nn as nn
+from network import utils
 
 
 @dataclass(eq=False)
@@ -14,6 +16,8 @@ class BaseNetwork(nn.Module, abc.ABC):
     hidden_dimensions: List[int] = field(default_factory=lambda: [3])
     output_dimension: int = 1
     nonlinearity: str = "none"
+    normalize: bool = False
+    weights: Optional[List[torch.FloatTensor]] = None
     bias: bool = True
     initialisation_std: float = 1.
     name: str = 'Net'
@@ -39,16 +43,27 @@ class BaseNetwork(nn.Module, abc.ABC):
     def _construct_layers(self):
         self._layers = nn.ModuleList()
         self._dimensions = [self.input_dimension] + self.hidden_dimensions
-        for in_size, out_size in zip(self._dimensions[:-1],
-                                     self._dimensions[1:]):
+        for i, (in_size, out_size) in enumerate(
+                zip(
+                    self._dimensions[:-1],
+                    self._dimensions[1:],
+                )):
             layer = nn.Linear(in_size, out_size, bias=self.bias)
-            self._initialise_weights(layer)
+            if self.weights is None:
+                layer_value = None
+            else:
+                layer_value = self.weights[i]
+                self._initialise_weights(layer, value=layer_value)
             self._layers.append(layer)
 
     def _get_nonlinear_function(self) -> Callable:
 
         if self.nonlinearity == 'none':
             return nn.Identity()
+        elif self.nonlinearity == 'scaled_sigmoid':
+            return utils.scaled_sigmoid
+        elif self.nonlinearity == 'sign':
+            return torch.sign
         else:
             raise NotImplementedError(
                 f"Undefined nonlinearity {self.nonlinearity}")
@@ -73,7 +88,9 @@ class BaseNetwork(nn.Module, abc.ABC):
         for layer in self.layers:
             x = self._nonlinear_function(layer(x))
         self._construct_output_layer()
-        y = self._get_output_from_head(x / math.sqrt(self.input_dimension))
+        if self.normalize:
+            x = x / math.sqrt(self.input_dimension)
+        y = self._get_output_from_head(x)
         return y
 
     @abc.abstractmethod

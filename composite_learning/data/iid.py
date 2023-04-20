@@ -54,3 +54,37 @@ class IIDTask(base.BaseDataLoader):
                         self.partition_size,
                     )).squeeze()
             }
+
+
+@dataclass
+class IIDRLTask(base.BaseDataLoader):
+    """IID task data modules.
+
+    Datapoints are sampled from unit nomral gaussian in batch, size of [batch_size, continuous_input_dim + binary_input_dim]
+
+    Args:
+        seq_len: length of input sequence.
+        batch_size: batch size. 
+        input_dim: size of dimension where continuous value is used. 
+        
+    """
+    seq_len: int
+    batch_size: int
+    input_dim: int
+
+    def __post_init__(self):
+
+        self.mean = torch.tensor([0.])
+        self.variance = torch.tensor([1.])
+        self.dist = torch.distributions.Normal(loc=self.mean,
+                                               scale=torch.sqrt(self.variance))
+
+    def get_batch(self) -> Dict[str, torch.Tensor]:
+        return {
+            'x':
+                self.dist.sample((
+                    self.batch_size,
+                    self.seq_len,
+                    self.input_dim,
+                )).squeeze()
+        }
