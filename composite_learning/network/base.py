@@ -18,7 +18,7 @@ class BaseNetwork(nn.Module, abc.ABC):
     nonlinearity: str = "none"
     normalize: bool = False
     weights: Optional[List[torch.FloatTensor]] = None
-    bias: bool = True
+    bias: bool = False
     initialisation_std: float = 1.
     name: str = 'Net'
 
@@ -53,7 +53,7 @@ class BaseNetwork(nn.Module, abc.ABC):
                 layer_value = None
             else:
                 layer_value = self.weights[i]
-                self._initialise_weights(layer, value=layer_value)
+            self._initialise_weights(layer, value=layer_value)
             self._layers.append(layer)
 
     def _get_nonlinear_function(self) -> Callable:

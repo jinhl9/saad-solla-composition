@@ -1,9 +1,10 @@
 import abc
 import os
-import datetime
+from datetime import datetime
 import logging
 from dataclasses import dataclass, field
 from typing import Optional
+from typing import Union
 
 import torch
 import torch.nn as nn
@@ -11,9 +12,9 @@ import torch.nn as nn
 
 @dataclass
 class BaseSolver(abc.ABC):
-    criterion: nn.Module
-    optimizer_type: str
-    lr: float
+    criterion: Union[nn.Module, None]
+    optimizer_type: Union[str, None]
+    lr: Union[float, None]
     logdir: str
 
     def __post_init__(self):
@@ -36,16 +37,17 @@ class BaseSolver(abc.ABC):
         return NotImplementedError()
 
     def _setup_logger(self):
-        filename = datetime.now().strftime("%Y%m%d%H%M%S")
+        if not os.path.exists(self.logdir):
+            os.makedirs(self.logdir)
+        logging.basicConfig(filename=os.path.join(self.logdir, f"log.log"),
+                            format='%(asctime)s %(message)s',
+                            filemode='w')
         self.logger = logging.getLogger()
-        handler = logging.StreamHandler()
-        handler.setFormatter(
-            logging.Formatter("%(asctime)s|%(levelname)s|%(name)s|%(message)s"))
-        handler.setLevel(logging.INFO)
-        file_handler = logging.FileHandler(
-            os.path.join(self.logdir, f"{filename}.log"))
-        file_handler.setFormattter(
-            logging.Formatter("%(asctimes|%(levelname)s|%(name)s|%(message)s"))
-        file_handler.setLevel(logging.INFO)
+
+        handler = logging.FileHandler(
+            filename=os.path.join(self.logdir, f"log.log"))
+        formatter = logging.Formatter('%(asctime)s %(message)s')
+        handler.setFormatter(formatter)
+        handler.setLevel(logging.DEBUG)
         self.logger.addHandler(handler)
-        self.logger.addHandler(file_handler)
+        self.logger.setLevel(logging.DEBUG)
