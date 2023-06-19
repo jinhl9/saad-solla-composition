@@ -22,6 +22,16 @@ class ContinuousStudent(BaseStudent):
         return self._head(x)
 
 
+@dataclass
+class ContextStudent(BaseStudent):
+
+    def _construct_output_layer(self):
+        self._head = nn.Identity()
+
+    def _get_output_from_head(self, x: torch.Tensor) -> torch.Tensor:
+        return self._head(x).sum(dim=1)
+
+
 class BinaryStudent(BaseStudent):
 
     def _construct_output_layer(self):

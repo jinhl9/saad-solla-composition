@@ -27,6 +27,16 @@ class ContinuousTeacher(BaseTeacher):
 
 
 @dataclass
+class ContextTeacher(BaseTeacher):
+
+    def _construct_output_layer(self):
+        self._head = nn.Identity()
+
+    def _get_output_from_head(self, x: torch.Tensor) -> torch.Tensor:
+        return self._head(x).sum(dim=1)
+
+
+@dataclass
 class BinaryTeacher(BaseTeacher):
 
     def _construct_output_layer(self):

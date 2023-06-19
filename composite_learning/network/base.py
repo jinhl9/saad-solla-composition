@@ -17,6 +17,7 @@ class BaseNetwork(nn.Module, abc.ABC):
     output_dimension: int = 1
     nonlinearity: str = "none"
     normalize: bool = False
+    standardize: bool = False
     weights: Optional[List[torch.FloatTensor]] = None
     bias: bool = False
     initialisation_std: float = 1.
@@ -39,6 +40,10 @@ class BaseNetwork(nn.Module, abc.ABC):
                 nn.init.normal_(layer.weight, std=self.initialisation_std)
                 if self.bias:
                     nn.init.normal_(layer.bias, std=self.initialisation_std)
+                if self.standardize:
+                    layer.weight.data /= math.sqrt(
+                        (layer.weight.data @ layer.weight.data.T /
+                         self.input_dimension).item())
 
     def _construct_layers(self):
         self._layers = nn.ModuleList()
@@ -86,12 +91,13 @@ class BaseNetwork(nn.Module, abc.ABC):
 
     def forward(self, x: torch.Tensor):
         for layer in self.layers:
+            _y = layer(x)
             x = self._nonlinear_function(layer(x))
         self._construct_output_layer()
         if self.normalize:
             x = x / math.sqrt(self.input_dimension)
         y = self._get_output_from_head(x)
-        return y
+        return _y, y
 
     @abc.abstractmethod
     def _get_output_from_head(self, x: torch.Tensor) -> torch.Tensor:
