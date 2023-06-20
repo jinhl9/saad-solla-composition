@@ -7,6 +7,7 @@ from typing import Union
 from dataclasses import dataclass
 import torch
 import torch.nn as nn
+import numpy as np
 
 import network
 import data
@@ -83,12 +84,17 @@ class TwoPhaseBaseSolver(abc.ABC):
             'phase1': {
                 'overlap': [],
                 'context_similarity': [],
-                'reward_rate': []
+                'reward_rate': [],
+                'R': [],
+                'Q': [],
             },
             'phase2': {
                 'overlap': [],
                 'context_similarity': [],
-                'reward_rate': []
+                'reward_rate': [],
+                'R': [],
+                'Q': [],
+                'P': []
             }
         }
 
@@ -191,6 +197,21 @@ class TwoPhaseContextSolver(TwoPhaseBaseSolver):
             p = 1 - 1 / math.pi * math.acos(overlap)
             reward_rate *= p**self.seq_len
         self._history_update(reward_rate=reward_rate)
+
+        Q = torch.zeros(size=(self.num_base_tasks, self.num_base_tasks))
+        R = torch.zeros(size=(self.num_base_tasks, self.num_base_tasks))
+        S = torch.zeros(size=(self.num_base_tasks, self.num_base_tasks))
+
+        for i in range(self.num_base_tasks):
+            for j in range(self.num_base_tasks):
+                Q[i][j] = 1 / self.network_size * self.students[i].layers[
+                    0].weight.data @ self.students[j].layers[0].weight.data.T
+                R[i][j] = 1 / self.network_size * self.students[i].layers[
+                    0].weight.data @ self.teachers[j].layers[0].weight.data.T
+                S[i][j] = 1 / self.network_size * self.teachers[i].layers[
+                    0].weight.data @ self.teachers[j].layers[0].weight.data.T
+
+        self._history_update(R=R, Q=Q)
         if self.phase2:
             tc_norm = self.context_teacher.layers[
                 0].weight.data @ self.context_teacher.layers[0].weight.data.T
@@ -200,6 +221,7 @@ class TwoPhaseContextSolver(TwoPhaseBaseSolver):
                 0].weight.data @ self.context_student.layers[0].weight.data.T
             context_similarity = (tc_sc / torch.sqrt(tc_norm) /
                                   torch.sqrt(sc_norm)).item()
+            self._history_update(context_similarity=context_similarity)
 
             samples = []
             for _ in range(100):
@@ -212,5 +234,31 @@ class TwoPhaseContextSolver(TwoPhaseBaseSolver):
 
             empirical_overlap = sum(samples) / len(samples)
 
-            self._history_update(context_similarity=context_similarity,
-                                 overlap=empirical_overlap)
+            self._history_update(overlap=empirical_overlap)
+
+            norm_student = np.sqrt(
+                np.sum([
+                    self.context_student.layers[0].weight.data[0, i] *
+                    self.context_student.layers[0].weight.data[0, j] * Q[i][j]
+                    for i in range(self.num_base_tasks)
+                    for j in range(self.num_base_tasks)
+                ]))
+
+            norm_teacher = np.sqrt(
+                np.sum([
+                    self.context_teacher.layers[0].weight.data[0, i] *
+                    self.context_teacher.layers[0].weight.data[0, j] * S[i][j]
+                    for i in range(self.num_base_tasks)
+                    for j in range(self.num_base_tasks)
+                ]))
+
+            angle = np.arccos(
+                np.sum([
+                    self.context_student.layers[0].weight.data[0, i] *
+                    self.context_teacher.layers[0].weight.data[0, j] * R[i][j]
+                    for i in range(self.num_base_tasks)
+                    for j in range(self.num_base_tasks)
+                ]) / norm_teacher / norm_student)
+
+            P = 1 - angle / np.pi
+            self._history_update(P=P)
