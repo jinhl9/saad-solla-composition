@@ -23,11 +23,14 @@ class ODESolver():
         for k, v in kwargs.items():
             self.history[k].append(v)
 
-    def train(self, num_iter: int):
+    def train(self, num_iter: int, update_frequency: int):
         self._init_params()
         self._setup_history()
-        for _ in range(num_iter):
-            self._step()
+        for i in range(num_iter):
+            update = False
+            if i % update_frequency == 0:
+                update = True
+            self._step(update=update)
 
 
 class RLPerceptronODESolver(ODESolver):
@@ -310,19 +313,26 @@ class BaselineRLPerceptronODESolver(ODESolver):
 class HierarchicalODESolver(ODESolver):
 
     def __init__(self, VS: np.array, VT: np.array, lr_w: float, lr_v: float,
-                 seq_length: int, delta: float):
+                 seq_length: int, delta: float, N: int):
         super().__init__(lr_positive=lr_w, seq_length=seq_length, delta=delta)
         self.num_task = len(VS)
         self.VS = VS
         self.VT = VT
-        self.N = 100
+        self.N = N
         self.lr_w = lr_w
         self.lr_v = lr_v
         self._setup_history()
         self._init_params()
 
     def _setup_history(self):
-        self.history = {'VS': [], 'Q': [], 'R': [], 'P': []}
+        self.history = {
+            'VS': [],
+            'Q': [],
+            'R': [],
+            'P': [],
+            'norm_student': [],
+            'norm_teacher': []
+        }
 
     def _product_norm(self, x: np.array, y: np.array):
         return np.linalg.norm(
@@ -356,10 +366,10 @@ class HierarchicalODESolver(ODESolver):
         return 1 - angle / np.pi
 
     def _init_params(self):
-        self.Q = np.zeros(shape=(self.num_task, self.num_task)) + abs(
-            np.random.normal(0, 1, size=(self.num_task, self.num_task)))
-        self.R = np.zeros(shape=(self.num_task, self.num_task)) + abs(
-            np.random.normal(0, 1, size=(self.num_task, self.num_task)))
+        self.Q = np.zeros(shape=(self.num_task, self.num_task))  # + abs(
+        #    np.random.normal(0, 1, size=(self.num_task, self.num_task)))
+        self.R = np.zeros(shape=(self.num_task, self.num_task))  # + abs(
+        #    np.random.normal(0, 1, size=(self.num_task, self.num_task)))
         self.S = np.zeros(shape=(self.num_task, self.num_task))
         for i in range(self.num_task):
             self.Q[i][i] += 1.
@@ -370,55 +380,63 @@ class HierarchicalODESolver(ODESolver):
         self.history['R'].append(self.R)
         self.history['P'].append(self.P)
 
-    def _step(self):
+    def _step(self, update):
         temp_VS = self.VS.copy()
         temp_Q = self.Q.copy()
         temp_R = self.R.copy()
+        temp_P = self.P.copy()
 
         for k in range(self.num_task):
-            dV = self.lr_v / np.sqrt(2 * np.pi) / np.power(self.N, 2) * (np.sum(
+            dV = self.lr_v / np.sqrt(2 * np.pi * self.N) * (np.sum(
                 [self.VT[i] * self.R[k][i]
                  for i in range(self.num_task)]) / self.norm_teacher + np.sum([
-                     self.VS[i] * self.Q[k][i] for i in range(self.num_task)
-                 ]) / self.norm_student) * np.power(self.overlap,
-                                                    self.seq_length - 1)
+                     self.VS[i] * self.Q[i][k] for i in range(self.num_task)
+                 ]) / self.norm_student) * np.power(self.P, self.seq_length - 1)
 
             temp_VS[k] += dV
 
             for l in range(self.num_task):
-                dR = self.lr_w / np.sqrt(
-                    2 * np.pi) / np.power(self.N, 2) * self.VS[k] * np.power(
-                        self.P, self.seq_length - 1) * ((np.sum([
-                            self.VT[i] * self.R[l][i]
-                            for i in range(self.num_task)
-                        ]) / self.norm_teacher) + ((np.sum([
-                            self.VS[i] * self.Q[i][l]
-                            for i in range(self.num_task)
-                        ])) / self.norm_student))
+                dR = self.lr_w / np.sqrt(2 * np.pi) / self.N * self.VS[
+                    k] * np.power(self.P, self.seq_length - 1) * ((np.sum([
+                        self.VT[i] * self.S[i][l] for i in range(self.num_task)
+                    ]) / self.norm_teacher) + ((np.sum([
+                        self.VS[i] * self.R[i][l] for i in range(self.num_task)
+                    ])) / self.norm_student))
                 temp_R[k][l] += dR
 
-                dQ = self.lr_w / np.sqrt(2 / np.pi) / np.power(
-                    self.N, 2) * (self.VS[k] * np.sum([
-                        self.VT[i] * self.R[l][i] for i in range(self.num_task)
-                    ]) + self.VS[l] * np.sum([
-                        self.VT[i] * self.R[k][i] for i in range(self.num_task)
-                    ])) / self.norm_teacher * np.power(
+                vk_term = np.sum([
+                    self.VT[i] * self.R[l][i] for i in range(self.num_task)
+                ]) / self.norm_teacher + np.sum(
+                    [self.VS[i] * self.Q[i][l]
+                     for i in range(self.num_task)]) / self.norm_student
+                vl_term = np.sum([
+                    self.VS[i] * self.R[i][k] for i in range(self.num_task)
+                ]) / self.norm_teacher + np.sum(
+                    [self.VS[i] * self.Q[i][k]
+                     for i in range(self.num_task)]) / self.norm_student
+                vkvl_term = np.sum([
+                    self.VT[i] * self.R[l][i] for i in range(self.num_task)
+                ]) * np.sum([
+                    self.VT[i] * self.R[k][i] for i in range(self.num_task)
+                ]) / np.power(self.norm_teacher, 2)
+
+                dQ = self.lr_w / self.N / np.sqrt(2 * np.pi) * (
+                    self.VS[k] * vk_term + self.VS[l] * vl_term) * np.power(
                         self.P, self.seq_length - 1) + np.power(
-                            self.lr_w, 2) * 2 / np.pi / self.N * self.VS[
-                                k] * self.VS[l] * np.sum([
-                                    self.VT[i] * self.VT[j] * self.R[k][i] *
-                                    self.R[l][j]
-                                    for i in range(self.num_task)
-                                    for j in range(self.num_task)
-                                ]) / np.power(self.norm_teacher, 2) * np.power(
-                                    self.P, self.seq_length) / self.seq_length
+                            self.lr_w, 2) / self.seq_length / self.N * np.power(
+                                self.P, self.seq_length
+                            ) * 2 / np.pi * self.VS[k] * self.VS[l] * vkvl_term
 
                 temp_Q[k][l] += dQ
-        self.history['VS'].append(temp_VS)
+
         self.VS = temp_VS
-        self.history['Q'].append(temp_Q)
         self.Q = temp_Q
-        self.history['R'].append(temp_R)
         self.R = temp_R
         self.P = self.overlap
-        self.history['P'].append(self.P)
+        if update:
+            self.history['VS'].append(self.VS)
+            self.history['Q'].append(self.Q)
+            self.history['R'].append(self.R)
+            self.history['P'].append(self.P)
+            self.history['norm_teacher'].append(self.norm_teacher)
+            self.history['norm_student'].append(self.norm_student)
