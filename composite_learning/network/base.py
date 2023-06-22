@@ -92,10 +92,10 @@ class BaseNetwork(nn.Module, abc.ABC):
     def forward(self, x: torch.Tensor):
         for layer in self.layers:
             _y = layer(x)
-            x = self._nonlinear_function(layer(x))
+            if self.normalize:
+                _y = _y / math.sqrt(self.input_dimension)
+            x = self._nonlinear_function(_y)
         self._construct_output_layer()
-        if self.normalize:
-            x = x / math.sqrt(self.input_dimension)
         y = self._get_output_from_head(x)
         return _y, y
 

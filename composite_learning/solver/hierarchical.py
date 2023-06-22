@@ -94,7 +94,8 @@ class TwoPhaseBaseSolver(abc.ABC):
                 'reward_rate': [],
                 'R': [],
                 'Q': [],
-                'P': []
+                'P': [],
+                'norm_student': []
             }
         }
 
@@ -191,8 +192,10 @@ class TwoPhaseContextSolver(TwoPhaseBaseSolver):
     def metric(self):
         reward_rate = 1
         for k, (t, s) in enumerate(zip(self.teachers, self.students)):
-            r = t.layers[0].weight.data @ s.layers[0].weight.data.T / 100
-            q = s.layers[0].weight.data @ s.layers[0].weight.data.T / 100
+            r = t.layers[0].weight.data @ s.layers[
+                0].weight.data.T / self.network_size
+            q = s.layers[0].weight.data @ s.layers[
+                0].weight.data.T / self.network_size
             overlap = r.item() / math.sqrt(q.item())
             p = 1 - 1 / math.pi * math.acos(overlap)
             reward_rate *= p**self.seq_len
@@ -262,3 +265,4 @@ class TwoPhaseContextSolver(TwoPhaseBaseSolver):
 
             P = 1 - angle / np.pi
             self._history_update(P=P)
+            self._history_update(norm_student=norm_student)
