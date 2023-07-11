@@ -514,11 +514,10 @@ class HierarchicalODESolver2(HierarchicalODESolver):
         for k in range(self.num_task):
             if DV is None:
 
-                dV = self.lr_v / np.sqrt(2 * np.pi) / np.power(
-                    self.N,
-                    3 / 2) * (self.VS[k] * self.Q[k][k] / self.norm_student +
-                              self.VT[k] * self.R[k][k] / self.norm_teacher
-                             ) * np.power(self.P, self.seq_length - 1)
+                dV = self.lr_v / np.sqrt(2 * np.pi) / np.power(self.N, 1) * (
+                    self.VS[k] * self.Q[k][k] / self.norm_student +
+                    self.VT[k] * self.R[k][k] / self.norm_teacher) * np.power(
+                        self.P, self.seq_length - 1)
                 """
                 dV = self.lr_v / np.sqrt(2 * np.pi) / np.power(
                     self.N, 1) * (np.sum([
