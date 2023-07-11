@@ -17,7 +17,7 @@ import data
 class TwoPhaseBaseSolver(abc.ABC):
     teachers: List[network.BaseTeacher]
     students: List[network.BaseStudent]
-    dataloader: data.BaseDataLoader
+    dataloaders: List[data.BaseDataLoader]
     logdir: Union[str, None]
 
     def __post_init__(self):
@@ -25,9 +25,12 @@ class TwoPhaseBaseSolver(abc.ABC):
             self.students), "Number of students and teachers should be the same"
         if not self.logdir is None:
             self._setup_logger()
-        self.seq_len = self.dataloader.seq_len[0]
+        self.seq_len = self.dataloaders[0].seq_len[0]
         self.num_base_tasks = len(self.teachers)
         self.network_size = self.teachers[0].input_dimension
+        self.Q = np.zeros(shape=(self.num_base_tasks, self.num_base_tasks))
+        self.R = np.zeros(shape=(self.num_base_tasks, self.num_base_tasks))
+        self.S = np.zeros(shape=(self.num_base_tasks, self.num_base_tasks))
 
     def train(self, nums_iter: List[int], lrs: List[tuple],
               update_frequency: int):
@@ -37,12 +40,14 @@ class TwoPhaseBaseSolver(abc.ABC):
         self.lr1_v = lrs[0][1]
         self.lr2_w = lrs[1][0]
         self.lr2_v = lrs[1][1]
+        self.dw = []
+        self.dv = []
 
         self.phase1 = True
         self.phase2 = False
 
         for n in range(nums_iter[0]):
-            x = self.dataloader.get_batch()['x']
+            x = self.dataloaders[0].get_batch()['x']
             self._phase1_step(x)
             if n % self.update_frequency == 0:
                 self.metric()
@@ -50,7 +55,7 @@ class TwoPhaseBaseSolver(abc.ABC):
         self.phase1 = False
         self.phase2 = True
         for n in range(nums_iter[1]):
-            x = self.dataloader.get_batch()['x']
+            x = self.dataloaders[1].get_batch()['x']
             self._phase2_step(x)
             if n % self.update_frequency == 0:
                 self.metric()
@@ -176,10 +181,12 @@ class TwoPhaseContextSolver(TwoPhaseBaseSolver):
             _, y_tilde_sign = self.context_teacher(ys[i][None, :])
             _, y_tilde_sign_hat = self.context_student(ys_hat[i][None, :])
             if y_tilde_sign != y_tilde_sign_hat:
+                self.dv.append([0] * self.num_base_tasks)
                 return None
 
             ys_tilde_sign.append(y_tilde_sign.item())
             ys_tilde_sign_hat.append(y_tilde_sign_hat.item())
+        _dvs = []
         for i in range(self.num_base_tasks):
             dw = self.lr2_w / math.sqrt(self.network_size) * torch.tensor(
                 ys_tilde_sign) * self.context_student.layers[0].weight.data[
@@ -187,7 +194,9 @@ class TwoPhaseContextSolver(TwoPhaseBaseSolver):
             self.students[i].layers[0].weight.data += dw.mean(dim=1)
             dv = torch.mean(self.lr2_v / math.sqrt(self.network_size) *
                             ys[:, i] * torch.tensor(ys_tilde_sign_hat))
+            _dvs.append(dv)
             self.context_student.layers[0].weight.data[0, i] += dv
+        self.dv.append(_dvs)
 
     def metric(self):
         reward_rate = 1
@@ -198,22 +207,30 @@ class TwoPhaseContextSolver(TwoPhaseBaseSolver):
                 0].weight.data.T / self.network_size
             overlap = r.item() / math.sqrt(q.item())
             p = 1 - 1 / math.pi * math.acos(overlap)
-            reward_rate *= p**self.seq_len
+            reward_rate *= (p**self.seq_len)
         self._history_update(reward_rate=reward_rate)
-
+        """
         Q = torch.zeros(size=(self.num_base_tasks, self.num_base_tasks))
         R = torch.zeros(size=(self.num_base_tasks, self.num_base_tasks))
         S = torch.zeros(size=(self.num_base_tasks, self.num_base_tasks))
-
+        """
         for i in range(self.num_base_tasks):
             for j in range(self.num_base_tasks):
-                Q[i][j] = 1 / self.network_size * self.students[i].layers[
-                    0].weight.data @ self.students[j].layers[0].weight.data.T
-                R[i][j] = 1 / self.network_size * self.students[i].layers[
-                    0].weight.data @ self.teachers[j].layers[0].weight.data.T
-                S[i][j] = 1 / self.network_size * self.teachers[i].layers[
-                    0].weight.data @ self.teachers[j].layers[0].weight.data.T
+                self.Q[i][j] = (
+                    1 / self.network_size *
+                    self.students[i].layers[0].weight.data
+                    @ self.students[j].layers[0].weight.data.T).item()
+                self.R[i][j] = (
+                    1 / self.network_size *
+                    self.students[i].layers[0].weight.data
+                    @ self.teachers[j].layers[0].weight.data.T).item()
+                self.S[i][j] = (
+                    1 / self.network_size *
+                    self.teachers[i].layers[0].weight.data
+                    @ self.teachers[j].layers[0].weight.data.T).item()
 
+        R = self.R.copy()
+        Q = self.Q.copy()
         self._history_update(R=R, Q=Q)
         if self.phase2:
             tc_norm = self.context_teacher.layers[
@@ -228,12 +245,13 @@ class TwoPhaseContextSolver(TwoPhaseBaseSolver):
 
             samples = []
             for _ in range(100):
-                x = self.dataloader.get_batch()['x']
+                x = self.dataloaders[1].get_batch()['x']
                 _, ys_tilde_sign_hat, _, ys_tilde_sign = self._phase2_inference(
                     x)
 
                 samples.append(
-                    (ys_tilde_sign * ys_tilde_sign_hat + 1).mean().item())
+                    np.mean(
+                        [ys_tilde_sign.numpy() == ys_tilde_sign_hat.numpy()]))
 
             empirical_overlap = sum(samples) / len(samples)
 
@@ -242,27 +260,35 @@ class TwoPhaseContextSolver(TwoPhaseBaseSolver):
             norm_student = np.sqrt(
                 np.sum([
                     self.context_student.layers[0].weight.data[0, i] *
-                    self.context_student.layers[0].weight.data[0, j] * Q[i][j]
-                    for i in range(self.num_base_tasks)
-                    for j in range(self.num_base_tasks)
+                    self.context_student.layers[0].weight.data[0, i] *
+                    self.Q[i][i] for i in range(self.num_base_tasks)
+                    #for j in range(self.num_base_tasks)
                 ]))
 
             norm_teacher = np.sqrt(
                 np.sum([
                     self.context_teacher.layers[0].weight.data[0, i] *
-                    self.context_teacher.layers[0].weight.data[0, j] * S[i][j]
-                    for i in range(self.num_base_tasks)
-                    for j in range(self.num_base_tasks)
+                    self.context_teacher.layers[0].weight.data[0, i] *
+                    self.S[i][i] for i in range(self.num_base_tasks)
+                    #for j in range(self.num_base_tasks)
                 ]))
 
             angle = np.arccos(
+                sum([
+                    self.context_student.layers[0].weight.data[0, i] *
+                    self.context_teacher.layers[0].weight.data[0, i] *
+                    self.R[i][i] for i in range(self.num_base_tasks)
+                ]) / norm_teacher / norm_student)
+            """
+            angle = np.arccos(
                 np.sum([
                     self.context_student.layers[0].weight.data[0, i] *
-                    self.context_teacher.layers[0].weight.data[0, j] * R[i][j]
+                    self.context_teacher.layers[0].weight.data[0, j] *
+                    self.R[i][j]
                     for i in range(self.num_base_tasks)
                     for j in range(self.num_base_tasks)
                 ]) / norm_teacher / norm_student)
-
+            """
             P = 1 - angle / np.pi
             self._history_update(P=P)
             self._history_update(norm_student=norm_student)
