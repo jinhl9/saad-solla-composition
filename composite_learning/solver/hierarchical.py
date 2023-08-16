@@ -90,7 +90,8 @@ class TwoPhaseBaseSolver(abc.ABC):
                 'Q': [],
                 'P_tilde': [],
                 'empirical_P_tilde': [],
-                'VS': []
+                'VS': [],
+                'VT': [],
             },
             'phase2': {
                 'R': [],
@@ -98,7 +99,8 @@ class TwoPhaseBaseSolver(abc.ABC):
                 'P': [],
                 'P_tilde': [],
                 'empirical_P_tilde': [],
-                'VS': []
+                'VS': [],
+                'VT':[]
             }
         }
 
@@ -274,7 +276,7 @@ class TwoPhaseContextSolver(TwoPhaseBaseSolver):
 
         P = 1 - angle / np.pi
         self._history_update(P_tilde=P)
-
+        """
         samples = []
         for _ in range(100):
             x = self.dataloaders[2].get_batch()['x']
@@ -286,6 +288,7 @@ class TwoPhaseContextSolver(TwoPhaseBaseSolver):
         empirical_P_tilde = sum(samples) / len(samples)
 
         self._history_update(empirical_P_tilde=empirical_P_tilde)
+        """
 
 
 @dataclass(kw_only=True)
