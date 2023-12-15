@@ -111,7 +111,7 @@ class TransientRLTask(base.BaseDataLoader):
     def __post_init__(self):
 
         self.mean = torch.tensor([0.])
-        self.variance = torch.tensor([1.])
+        self.variance = torch.tensor([0.1])
         self.dist = torch.distributions.Normal(loc=self.mean,
                                                scale=torch.sqrt(self.variance))
 

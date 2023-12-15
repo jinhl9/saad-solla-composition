@@ -114,6 +114,7 @@ class CompositionalTaskSimulator(BaseSimulator):
     WS: Union[None, np.array] = None
     VT: Union[None, np.array] = None
     VS: Union[None, np.array] = None
+    V_norm: int = 0
 
     def setup_train(self):
         self.lr_wc = self.lr['lr_wc']
@@ -140,60 +141,91 @@ class CompositionalTaskSimulator(BaseSimulator):
             'Q': np.zeros((num_update, self.num_task, self.num_task)),
             'R': np.zeros((num_update, self.num_task, self.num_task)),
             'P': np.zeros((num_update, self.num_task)),
+            'overlap': np.zeros((num_update, self.num_task)),
             'VS': np.zeros((num_update, self.num_task)),
             'VSVT': np.zeros((num_update, self.num_task)),
-            'P_tilde': np.zeros((num_update))
+            'P_tilde': np.zeros((num_update)),
+            'overlap_tilde': np.zeros((num_update))
         }
 
-    def update_history(self, history_index):
-        Q = self.WS @ self.WS.T / self.input_dim
-        R = self.WS @ self.WT.T / self.input_dim
-        P = 1 - np.arccos(np.diagonal(R) / np.sqrt(np.diagonal(Q))) / np.pi
+    @property
+    def norm_student(self):
         if self.identical:
-            norm_student = np.sqrt(
+            return np.sqrt(
                 np.sum([
-                    self.VS[i] * self.VS[j] * Q[i][j]
+                    self.VS[i] * self.VS[j] * self.Q[i][j]
                     for i in range(self.num_task)
                     for j in range(self.num_task)
                 ]))
 
-            norm_teacher = np.sqrt(
+        else:
+            return np.sqrt(
+                np.sum([
+                    self.VS[i] * self.VS[i] * self.Q[i][i]
+                    for i in range(self.num_task)
+                ]))
+
+    @property
+    def norm_teacher(self):
+        if self.identical:
+            return np.sqrt(
                 np.sum([
                     self.VT[i] * self.VT[j] * self.S[i][j]
                     for i in range(self.num_task)
                     for j in range(self.num_task)
                 ]))
-            angle = np.arccos(
-                np.sum([
-                    self.VS[i] * self.VT[j] * R[i][j]
-                    for i in range(self.num_task)
-                    for j in range(self.num_task)
-                ]) / norm_teacher / norm_student)
-        if not self.identical:
-            norm_student = np.sqrt(
-                np.sum([
-                    self.VS[i] * self.VS[i] * Q[i][i]
-                    for i in range(self.num_task)
-                ]))
-
-            norm_teacher = np.sqrt(
+        else:
+            return np.sqrt(
                 np.sum([
                     self.VT[i] * self.VT[i] * self.S[i][i]
                     for i in range(self.num_task)
                 ]))
-            angle = np.arccos(
-                np.sum([
-                    self.VS[i] * self.VT[i] * R[i][i]
-                    for i in range(self.num_task)
-                ]) / norm_teacher / norm_student)
 
-        P_tilde = 1 - angle / np.pi
+    @property
+    def Q(self):
+        return self.WS @ self.WS.T / self.input_dim
 
-        self.history['Q'][history_index] = Q
-        self.history['R'][history_index] = R
-        self.history['P'][history_index] = P
+    @property
+    def R(self):
+        return self.WS @ self.WT.T / self.input_dim
+
+    @property
+    def overlap_task(self):
+
+        return np.diagonal(self.R) / np.sqrt(np.diagonal(self.Q))
+
+    @property
+    def P_task(self):
+        return 1 - np.arccos(self.overlap_task) / np.pi
+
+    @property
+    def overlap(self):
+        if self.identical:
+            return np.sum([
+                self.VS[i] * self.VT[j] * self.R[i][j]
+                for i in range(self.num_task)
+                for j in range(self.num_task)
+            ]) / self.norm_teacher / self.norm_student
+
+        if not self.identical:
+            return np.sum([
+                self.VS[i] * self.VT[i] * self.R[i][i]
+                for i in range(self.num_task)
+            ]) / self.norm_teacher / self.norm_student
+
+    @property
+    def P_tilde(self):
+        return 1 - np.arccos(self.overlap) / np.pi
+
+    def update_history(self, history_index):
+
+        self.history['Q'][history_index] = self.Q
+        self.history['R'][history_index] = self.R
+        self.history['P'][history_index] = self.P_task
+        self.history['overlap'][history_index] = self.overlap_task
         self.history['VS'][history_index] = self.VS
-        self.history['P_tilde'][history_index] = P_tilde
+        self.history['P_tilde'][history_index] = self.P_tilde
+        self.history['overlap_tilde'][history_index] = self.overlap
         self.history['VSVT'][history_index] = np.dot(
             self.VS, self.VT) / np.linalg.norm(self.VS) / np.linalg.norm(
                 self.VT)
@@ -214,16 +246,17 @@ class CompositionalTaskSimulator(BaseSimulator):
         (y, y_sign, y_hat,
          y_hat_sign), (y_tilde, y_tilde_hat, y_tilde_sign,
                        y_tilde_hat_sign) = self.inference(x)  #num_task*n_seq
-        self.dv = np.float128(0)
         if (y_tilde_sign == y_tilde_hat_sign).all():
-            pre = np.float128(self.VS)
             dW = (1 / np.sqrt(self.input_dim) * y_tilde_hat_sign[:, None].T *
                   self.VS[:, None] * x.swapaxes(0, 1)).mean(axis=-1).T
             dV = (1 / self.input_dim * y_hat * y_tilde_hat_sign).mean(axis=-1)
             self.WS += self.lr_wc * dW
             self.VS += self.lr_vc * dV
-            self.VS /= np.linalg.norm(self.VS)
-            self.dv = np.float128(self.VS) - pre
+            if self.V_norm != 0:
+                self.VS *= np.sqrt(self.num_task) / np.linalg.norm(self.VS)
+            else:
+                self.VS /= np.linalg.norm(self.VS)
+
             self.WS = np.divide(self.WS * np.sqrt(self.input_dim),
                                 np.linalg.norm(self.WS, axis=1)[:, None])
 
@@ -343,6 +376,7 @@ class CurriculumCompositionalTaskSimulator(CompositionalTaskSimulator):
     WS: Union[None, np.array] = None
     VT: Union[None, np.array] = None
     VS: Union[None, np.array] = None
+    V_norm: int = 0
 
     def __post_init__(self):
         self.multipleRLPerceptron = MultipleRLPerceptronSimulator(
@@ -414,7 +448,8 @@ class CurriculumRegressionCompositionalTaskSimulator(
 class HRLODESolver(ode.ODESolver):
 
     def __init__(self, VS: np.array, VT: np.array, WS: np.array, WT: np.array,
-                 lr_ws: List[float], lr_v: float, seq_length: int, N: int):
+                 lr_ws: List[float], lr_v: float, seq_length: int, N: int,
+                 V_norm: int):
         super().__init__()
         self.num_task = len(VS)
         self.seq_length = seq_length
@@ -426,6 +461,7 @@ class HRLODESolver(ode.ODESolver):
         self.lr_v = lr_v
         self.WS = WS
         self.WT = WT
+        self.V_norm = V_norm
 
         for w in self.WT:
             w /= np.sqrt(w @ w.T / self.N)
@@ -436,7 +472,9 @@ class HRLODESolver(ode.ODESolver):
                 'Q': np.zeros((num_update[0], self.num_task, self.num_task)),
                 'R': np.zeros((num_update[0], self.num_task, self.num_task)),
                 'P': np.zeros((num_update[0], self.num_task)),
+                'overlap': np.zeros((num_update[0], self.num_task)),
                 'P_tilde': np.zeros((num_update[0])),
+                'overlap_tilde': np.zeros((num_update[0])),
                 'VS': np.zeros((num_update[0], self.num_task)),
                 'VT': self.VT
             },
@@ -444,7 +482,9 @@ class HRLODESolver(ode.ODESolver):
                 'Q': np.zeros((num_update[1], self.num_task, self.num_task)),
                 'R': np.zeros((num_update[1], self.num_task, self.num_task)),
                 'P': np.zeros((num_update[1], self.num_task)),
+                'overlap': np.zeros((num_update[1], self.num_task)),
                 'P_tilde': np.zeros((num_update[1])),
+                'overlap_tilde': np.zeros((num_update[1])),
                 'VS': np.zeros((num_update[1], self.num_task)),
                 'VT': self.VT,
                 'VSVT': np.zeros((num_update[1]))
@@ -504,13 +544,14 @@ class HRLODESolver(ode.ODESolver):
         self.Q = temp_Q
         self.R = temp_R
 
-
         if update:
             update_index = self.train_iter // self.update_frequency
             self.history['phase1']['Q'][update_index] = self.Q
             self.history['phase1']['R'][update_index] = self.R
             self.history['phase1']['P_tilde'][update_index] = self.P_tilde
             self.history['phase1']['P'][update_index] = self.P_task
+            self.history['phase1']['overlap_tilde'][update_index] = self.overlap
+            self.history['phase1']['overlap'][update_index] = self.overlap_task
 
     def _step2(self, update, DV=None, DQ=None, DR=None):
 
@@ -544,7 +585,10 @@ class HRLODESolver(ode.ODESolver):
                     self.VS[:, None] @ self.VS[:, None].T)
 
         temp_VS += dV
-        temp_VS /= np.linalg.norm(temp_VS)
+        if self.V_norm != 0:
+            temp_VS *= np.sqrt(self.num_task) / np.linalg.norm(temp_VS)
+        else:
+            temp_VS /= np.linalg.norm(temp_VS)
         temp_R += np.diag(np.diag(dR))
         temp_Q += np.diag(np.diag(dQ))
         temp_R /= np.sqrt(np.abs(temp_Q))
@@ -564,6 +608,8 @@ class HRLODESolver(ode.ODESolver):
             self.history['phase2']['VSVT'][update_index] = np.dot(
                 self.VT, self.VS) / np.linalg.norm(self.VT) / np.linalg.norm(
                     self.VS)
+            self.history['phase2']['overlap_tilde'][update_index] = self.overlap
+            self.history['phase2']['overlap'][update_index] = self.overlap_task
 
     @property
     def norm_student(self):
@@ -574,21 +620,25 @@ class HRLODESolver(ode.ODESolver):
         return np.sqrt(np.sum(self.VT * self.VT * np.diag(self.S)))
 
     @property
-    def P_tilde(self):
-        angle = np.arccos(
-            np.sum(self.VS * self.VT * np.diag(self.R)) / self.norm_teacher /
-            self.norm_student)
+    def overlap(self):
+        return np.sum(self.VS * self.VT *
+                      np.diag(self.R)) / self.norm_teacher / self.norm_student
 
-        return 1 - angle / np.pi
+    @property
+    def P_tilde(self):
+
+        return 1 - np.arccos(self.overlap) / np.pi
+
+    @property
+    def overlap_task(self):
+
+        return np.diag(self.R) / np.sqrt(np.diag(self.Q)) / np.sqrt(
+            np.diag(self.S))
 
     @property
     def P_task(self):
 
-        angle = np.arccos(
-            np.diag(self.R) / np.sqrt(np.diag(self.Q)) /
-            np.sqrt(np.diag(self.S)))
-
-        return 1 - angle / np.pi
+        return 1 - np.arccos(self.overlap_task) / np.pi
 
 
 class HRLODESolverIdentical(HRLODESolver):
