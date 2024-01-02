@@ -1,94 +1,174 @@
 import os
 import argparse
 from typing import List
+from typing import Union
 from datetime import datetime
-import data
-import network
 import solver
 import joblib
 import json
-
-import torch
 import numpy as np
 
-def load_trained_networks(params:dict, weights:dict):
 
-    students = []
-    teachers = []
+def gram_schmidt(N, K):
+    """
+    Given the dimension space dimension N, generate K random vectors and its orthogonal spans
+    """
 
-    for k in range(params['num_tasks']):
-        student = network.ContinuousStudent(input_dimension=params['input_dim'],
-                                        hidden_dimensions=[1],
-                                        nonlinearity='sign',
-                                        normalize=True)
-        
-        teacher = network.ContinuousTeacher(input_dimension=params['input_dim'],
-                                            hidden_dimensions=[1],
-                                            nonlinearity='sign',
-                                            standardize=True,
-                                            normalize=True)
-        
-        student.layers[0].weight.data = weights[k]['WS']
-        teacher.layers[0].weight.data = weights[k]['WT']
-        students.append(student)
-        teachers.append(teacher)
-    student_c = network.ContextStudent(input_dimension=params['num_tasks'],
-                                    hidden_dimensions=[1],
-                                    nonlinearity='sign',
-                                    initialisation_std = 0.001,
-                                    normalize=False)
-    
-    student_c.layers[0].weight.data = weights['vs']
+    def proj(u, v):
+        """
+        Return projection of v to u
+        """
+        return np.dot(v, u) / np.dot(u, u) * u
 
-    return students, teachers, student_c
+    V = np.random.normal(loc=0., scale=1., size=(K, N))
+    U = np.zeros_like(V)
+
+    ## Initialise u1 to v1
+    U[0] = V[0]
+
+    ## Gram-schomidt process
+    for k in range(1, K):
+        projection_terms = [proj(U[i], V[k]) for i in range(k)]
+        U[k] = V[k] - np.sum(projection_terms, axis=0)
+
+    return V, U
 
 
-def main(logpath:str, perturbation_level:float, num_iter:int, lr_w:float, lr_v:float, update_frequency: int, seeds:int):
-    ##Load previously trained experiment
-    assert os.path.isfile(logpath.replace('simlator_', 'simulator_weights')), 'Weights file not existing'
-    
-    rootpath= logpath.split('simulator')[0]
-    sim_seed=logpath.split('simulator_')[1].split('.jl')[0]
-    log_time = datetime.now().strftime("%Y%m%d%H%M%S%f")
-    logdir = os.path.join(rootpath, log_time)
-    os.mkdir(logdir)
-    with open(os.path.join(logdir, f'perturbation_args.json'), 'w') as f:
-            json.dump(args, f)
+def control_VS(VT, angle):
+    dim = len(VT)
+    VT_norm = VT / np.linalg.norm(VT)
+    a = np.random.normal(loc=0., scale=1, size=(dim))
+    b = np.random.normal(loc=0., scale=1, size=(dim))
+    h = (b - a) - np.dot((b - a), VT_norm) * VT_norm
+    v = np.cos(angle) * VT_norm + np.sin(angle) * h / np.linalg.norm(h)
 
-    params=json.load(open(os.path.join(rootpath, 'args.json'),'r'))
-    weights=joblib.load(logpath.replace('.jl', '_weights.jl'))
-    perturbed_context = torch.FloatTensor([[1+perturbation_level, 1-perturbation_level, 1+perturbation_level, 1-perturbation_level]])
+    return v
+
+
+def main(input_dim: int, num_tasks: int, seq_length: int, v_angle: float,
+         perturbation_angle: float, perturbation_num_iter: int,
+         lr_ws: List[float], lr_v: float, nums_iter: List[int],
+         update_frequency: int, logdir: str, seeds: int, w_angle: float,
+         v_norm: int, args: dict):
+
+    log_time = datetime.now().strftime("%Y%m%d%H%M%S.%f")
+    log_folder = os.path.join(logdir, log_time)
+    if not os.path.isdir(log_folder):
+        os.makedirs(log_folder)
+
+    with open(os.path.join(log_folder, 'args.json'), 'w') as f:
+        json.dump(args, f)
+    nums_iter = np.array(nums_iter)
 
     for seed in range(seeds):
-        students, teachers, student_c = load_trained_networks(params, weights)
-        teacher_c = network.ContextTeacher(input_dimension=params['num_tasks'],
-                                       hidden_dimensions=[1],
-                                       nonlinearity='sign',
-                                       normalize=False)
-        teacher_c.layers[0].weight.data = perturbed_context
-        dataloader = data.iid.TransientRLTask(batch_size = 1, seq_len = [params['seq_length']]*params['num_tasks'], input_dim = params['input_dim'], identical = params['identical'])
-        simulator = solver.TwoPhaseContextSolver(teachers=teachers, students = students, context_teacher=teacher_c, context_student=student_c, dataloaders = [dataloader, dataloader, dataloader], logdir = None, identical=params['identical'])
-        simulator.train(nums_iter = [0,num_iter], lrs = [(0, 0),(lr_w, lr_v)], update_frequency=update_frequency)
+        _, WT_sim = gram_schmidt(input_dim, num_tasks)
 
-        joblib.dump(simulator.history,  os.path.join(logdir, f'perturbation_sim{sim_seed}_{seed}.jl'))
+        WS_sim = WT_sim.copy()
+
+        for i, w in enumerate(WS_sim):
+            w_rot = control_VS(w, w_angle) * np.sqrt(input_dim)
+            WS_sim[i] = w_rot
+        WS_ode = WS_sim.copy()
+
+        VT_sim = np.ones(num_tasks)
+        VT_sim /= np.linalg.norm(VT_sim)
+        VS_sim = control_VS(VT_sim, v_angle)
+        VS_sim /= np.linalg.norm(VS_sim)
+        VS_ode = VS_sim.copy()
+        VT_ode = VT_sim.copy()
+        WS_ode = WS_sim.copy()
+        WT_ode = WT_sim.copy()
+
+        ode_solver = solver.HRLODESolver(VS=VS_ode,
+                                         VT=VT_ode,
+                                         WS=WS_ode,
+                                         WT=WT_ode,
+                                         lr_ws=lr_ws,
+                                         lr_v=lr_v,
+                                         seq_length=seq_length,
+                                         N=input_dim,
+                                         V_norm=v_norm)
+        ode_solver.train(nums_iter, update_frequency=update_frequency)
+
+        VT_perturbed = control_VS(ode_solver.VT, perturbation_angle)
+        VT_perturbed /= np.linalg.norm(VT_perturbed)
+
+        perturbed_solver = solver.HRLODESolver(VS=ode_solver.VS.copy(),
+                                               VT=VT_perturbed,
+                                               WS=ode_solver.WS.copy(),
+                                               WT=ode_solver.WT.copy(),
+                                               lr_ws=lr_ws,
+                                               lr_v=lr_v,
+                                               seq_length=seq_length,
+                                               N=input_dim,
+                                               V_norm=v_norm)
+        perturbed_solver.train(np.array([0, perturbation_num_iter]),
+                               update_frequency=update_frequency)
+        joblib.dump(
+            {
+                'regular': ode_solver.history,
+                'perturbation': perturbed_solver.history
+            }, os.path.join(log_folder, f'ode_{seed}.jl'))
+        """
+        sim = solver.simple_hrl_solver.CurriculumCompositionalTaskSimulator(
+            input_dim=input_dim,
+            seq_len=seq_length,
+            num_task=num_tasks,
+            identical=False,
+            WT=WT_sim,
+            WS=WS_sim,
+            VT=VT_sim,
+            VS=VS_sim,
+            V_norm=v_norm)
+
+        sim.train(num_iter=nums_iter,
+                  update_frequency=update_frequency,
+                  lr={
+                      'lr_w': lr_ws[0],
+                      'lr_wc': lr_ws[1],
+                      'lr_vc': lr_v
+                  })
+
+        joblib.dump({'nid': sim.history},
+                    os.path.join(log_folder, f'sim_{seed}.jl'))
+        """
 
 
+if __name__ == '__main__':
 
-if __name__ == "__main__":
+    def _helper_list_input(args_dict, key, type_func):
+        return [type_func(item) for item in args_dict[key].split(',')]
+
     parser = argparse.ArgumentParser()
+    ##Task parameters
+    parser.add_argument("--input-dim", type=int, default=1000)
+    parser.add_argument("--num-tasks", type=int, default=4)
+    parser.add_argument("--seq-length", type=int, default=4)
 
-    ## Experiment params
-    parser.add_argument('--logpath', default = None, type= str, help='Path to the trained model weights to use for experiment')
-    parser.add_argument('--perturbation-level', default = 0.1, type = float)
-    parser.add_argument('--seeds', type = int)
-
-    ## Training params
-    parser.add_argument('--num-iter', type=int)
-    parser.add_argument('--update-frequency', type=int)
-    parser.add_argument('--lr-v', type = float)
-    parser.add_argument('--lr-w', type = float)
-    
+    ##Training parameters
+    parser.add_argument("--nums-iter", help='delimited list input', type=str)
+    parser.add_argument("--lr-ws", help='delimited list input', type=str)
+    parser.add_argument("--v-angle",
+                        help='initial angle between VS and VT',
+                        type=float)
+    parser.add_argument("--w-angle",
+                        help='initial angle between WS and WT',
+                        type=float)
+    parser.add_argument("--perturbation-angle",
+                        help='angle between VT and perturbed VT',
+                        type=float)
+    parser.add_argument("--perturbation-num-iter",
+                        help='training iteration after the VT perturbation',
+                        type=int)
+    parser.add_argument("--lr-v", type=float)
+    parser.add_argument("--update-frequency", type=int, default=1000)
+    parser.add_argument("--logdir", type=str, default='../hrl_ode_matrix')
+    parser.add_argument("--seeds", type=int, default=1)
+    parser.add_argument("--v-norm", type=int, default=1)
 
     args = vars(parser.parse_args())
-    
-    main(**args)
+
+    args['nums_iter'] = _helper_list_input(args, 'nums_iter', int)
+    args['lr_ws'] = _helper_list_input(args, 'lr_ws', float)
+
+    main(**args, args=args)

@@ -42,13 +42,13 @@ def control_VS(VT, angle):
     h = (b - a) - np.dot((b - a), VT_norm) * VT_norm
     v = np.cos(angle) * VT_norm + np.sin(angle) * h / np.linalg.norm(h)
 
-    return v * 0.00001
+    return v
 
 
-def main(input_dim: int, num_tasks: int, seq_length: int, v_angle: float,
+def main(input_dim: int, num_tasks: int, seq_length: int, vs: List[float],
          vt_weights: List[float], lr_ws: List[float], lr_v: float,
          nums_iter: List[int], update_frequency: int, logdir: str, seeds: int,
-         noise_scale: float, args: dict):
+         noise_scale: float, v_norm: int, args: dict):
 
     log_time = datetime.now().strftime("%Y%m%d%H%M%S.%f")
     log_folder = os.path.join(logdir, log_time)
@@ -61,14 +61,14 @@ def main(input_dim: int, num_tasks: int, seq_length: int, v_angle: float,
 
     for seed in range(seeds):
         _, WT_sim = gram_schmidt(input_dim, num_tasks)
+        WS_sim = WT_sim.copy()
+        for i, w in enumerate(WS_sim):
+            w_rot = control_VS(w, np.pi / 2) * np.sqrt(input_dim)
+            WS_sim[i] = w_rot
+        WS_ode = WS_sim.copy()
 
-        WS_sim = np.random.normal(loc=0., scale=1., size=(num_tasks, input_dim))
-
-        WS_sim = np.divide(WS_sim * np.sqrt(input_dim),
-                           np.linalg.norm(WS_sim, axis=1)[:, None])
-
-        VT_sim = np.array(vt_weights)
-        VS_sim = control_VS(VT_sim, v_angle)
+        VT_sim = np.ones(num_tasks)
+        VS_sim = np.array(vs)
         VS_sim /= np.linalg.norm(VS_sim)
         VS_ode = VS_sim.copy()
         VT_ode = VT_sim.copy()
@@ -82,7 +82,8 @@ def main(input_dim: int, num_tasks: int, seq_length: int, v_angle: float,
                                          lr_ws=lr_ws,
                                          lr_v=lr_v,
                                          seq_length=seq_length,
-                                         N=input_dim)
+                                         N=input_dim,
+                                         V_norm=v_norm)
         ode_solver.train(nums_iter, update_frequency=update_frequency)
 
         joblib.dump({'nid': ode_solver.history},
@@ -96,7 +97,8 @@ def main(input_dim: int, num_tasks: int, seq_length: int, v_angle: float,
             WT=WT_sim,
             WS=WS_sim,
             VT=VT_sim,
-            VS=VS_sim)
+            VS=VS_sim,
+            V_norm=v_norm)
 
         sim.train(num_iter=nums_iter,
                   update_frequency=update_frequency,
@@ -126,16 +128,18 @@ if __name__ == '__main__':
     ##Training parameters
     parser.add_argument("--nums-iter", help='delimited list input', type=str)
     parser.add_argument("--lr-ws", help='delimited list input', type=str)
-    parser.add_argument("--v-angle", help='angle between VS and VT', type=float)
+    parser.add_argument("--vs", help='angle between VS and VT', type=str)
     parser.add_argument("--lr-v", type=float)
     parser.add_argument("--update-frequency", type=int, default=1000)
     parser.add_argument("--logdir", type=str, default='../hrl_ode_matrix')
     parser.add_argument("--seeds", type=int, default=1)
+    parser.add_argument("--v-norm", type=int, default=1)
 
     args = vars(parser.parse_args())
 
     args['nums_iter'] = _helper_list_input(args, 'nums_iter', int)
     args['lr_ws'] = _helper_list_input(args, 'lr_ws', float)
     args['vt_weights'] = _helper_list_input(args, 'vt_weights', float)
+    args['vs'] = _helper_list_input(args, 'vs', float)
 
     main(**args, args=args)
