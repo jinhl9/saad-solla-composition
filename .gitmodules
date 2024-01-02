@@ -1,0 +1,3 @@
+[submodule "composite_learning/experiments/procgen_composite"]
+	path = composite_learning/experiments/procgen_composite
+	url = git@github.com:jinhl9/procgen_composite.git
