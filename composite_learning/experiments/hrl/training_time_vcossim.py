@@ -4,6 +4,7 @@ from typing import List
 from typing import Union
 from datetime import datetime
 import solver
+from utils import functions
 import joblib
 import json
 import numpy as np
@@ -47,24 +48,12 @@ def orthogonalize(U, V):
     U = V - np.sum(proj(U, V))
     return U, V
 
-
-def control_VS(VT, angle):
-    dim = len(VT)
-    VT_norm = VT / np.linalg.norm(VT)
-    a = np.random.normal(loc=0., scale=1, size=(dim))
-    b = np.random.normal(loc=0., scale=1, size=(dim))
-    h = (b - a) - np.dot((b - a), VT_norm) * VT_norm
-    v = np.cos(angle) * VT_norm + np.sin(angle) * h / np.linalg.norm(h)
-
-    return v
-
-
 def func_max_overlap(x, T):
     return 1 / T * x * (1 - 1 / np.pi * np.arccos(x)) - np.sqrt(
         2 / np.pi) * (1 - x**2)
 
 
-def main(input_dim: int, num_tasks: int, seq_length: int, vs: List[float],vt: List[float],
+def main(input_dim: int, num_tasks: int, seq_length: int, cossim: float,vt: List[float],
          w_angle: float, lr_w1: float, lr_w2: float, lr_v: float, max_iters: List[int],
          simulation: int, ode: int, logdir: str, seeds: int, w_noise:float, v_noise:float, args: dict):
 
@@ -86,14 +75,13 @@ def main(input_dim: int, num_tasks: int, seq_length: int, vs: List[float],vt: Li
         _, WT = gram_schmidt(input_dim, num_tasks)
         WS = WT.copy()
         for i, w in enumerate(WS):
-            w_rot = control_VS(w, w_angle) * np.sqrt(input_dim)
+            w_rot = functions.control_VS(w, w_angle, False) * np.sqrt(input_dim)
             WS[i] = w_rot
         WS_copy = WS.copy()
 
         VT = np.array(vt)
         VT /= np.linalg.norm(VT)
-        VS = np.array(vs)
-        VS /= np.linalg.norm(VS)
+        VS = functions.control_VS(VT, np.arccos(cossim))
         VS_copy = VS.copy()
         lr_ws = [lr_w1, lr_w2]
         if ode:
@@ -195,7 +183,7 @@ if __name__ == '__main__':
     parser.add_argument("--max-iters", help='delimited list input', type=str)
     parser.add_argument("--lr-w1", help='delimited list input', type=float)
     parser.add_argument("--lr-w2", help='delimited list input', type=float)
-    parser.add_argument("--vs", help='vs', type=str)
+    parser.add_argument("--cossim", help='vs', type=float)
     parser.add_argument("--vt", help='vt', type=str, default='1,1')
     parser.add_argument("--w-angle", help='angle between WS and WT', type=float)
     parser.add_argument("--lr-v", type=float)
@@ -210,7 +198,6 @@ if __name__ == '__main__':
 
     args['max_iters'] = _helper_list_input(args, 'max_iters', int)
     #args['lr_ws'] = _helper_list_input(args, 'lr_ws', float)
-    args['vs'] = _helper_list_input(args, 'vs', float)
     args['vt'] = _helper_list_input(args, 'vt', float)
 
     main(**args, args=args)

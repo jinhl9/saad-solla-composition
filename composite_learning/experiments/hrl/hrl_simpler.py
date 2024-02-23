@@ -46,9 +46,9 @@ def control_VS(VT, angle):
 
 
 def main(input_dim: int, num_tasks: int, seq_length: int, vs: List[float],
-         vt_weights: List[float], lr_ws: List[float], lr_v: float,
+         vt: List[float], lr_ws: List[float], lr_v: float,
          nums_iter: List[int], update_frequency: int, logdir: str, seeds: int,
-         noise_scale: float, v_norm: int, args: dict):
+         noise_scale: float, v_norm: int, w_noise:float, v_noise:float, ode, sim, args: dict):
 
     log_time = datetime.now().strftime("%Y%m%d%H%M%S.%f")
     log_folder = os.path.join(logdir, log_time)
@@ -58,7 +58,7 @@ def main(input_dim: int, num_tasks: int, seq_length: int, vs: List[float],
     with open(os.path.join(log_folder, 'args.json'), 'w') as f:
         json.dump(args, f)
     nums_iter = np.array(nums_iter)
-
+    
     for seed in range(seeds):
         _, WT_sim = gram_schmidt(input_dim, num_tasks)
         WS_sim = WT_sim.copy()
@@ -67,49 +67,53 @@ def main(input_dim: int, num_tasks: int, seq_length: int, vs: List[float],
             WS_sim[i] = w_rot
         WS_ode = WS_sim.copy()
 
-        VT_sim = np.ones(num_tasks)
+        VT_sim = vt
         VS_sim = np.array(vs)
+        VT_sim /= np.linalg.norm(VT_sim)
         VS_sim /= np.linalg.norm(VS_sim)
         VS_ode = VS_sim.copy()
         VT_ode = VT_sim.copy()
         WS_ode = WS_sim.copy()
         WT_ode = WT_sim.copy()
+        if ode:
+            ode_solver = solver.HRLODESolver(VS=VS_ode,
+                                            VT=VT_ode,
+                                            WS=WS_ode,
+                                            WT=WT_ode,
+                                            lr_ws=lr_ws,
+                                            lr_v=lr_v,
+                                            seq_length=seq_length,
+                                            N=input_dim,
+                                            V_norm=v_norm,
+                                            )
+            ode_solver.train(nums_iter, update_frequency=update_frequency)
 
-        ode_solver = solver.HRLODESolver(VS=VS_ode,
-                                         VT=VT_ode,
-                                         WS=WS_ode,
-                                         WT=WT_ode,
-                                         lr_ws=lr_ws,
-                                         lr_v=lr_v,
-                                         seq_length=seq_length,
-                                         N=input_dim,
-                                         V_norm=v_norm)
-        ode_solver.train(nums_iter, update_frequency=update_frequency)
+            joblib.dump({'nid': ode_solver.history},
+                        os.path.join(log_folder, f'ode_{seed}.jl'))
+        if sim:
+            sim = solver.simple_hrl_solver.CurriculumCompositionalTaskSimulator(
+                input_dim=input_dim,
+                seq_len=seq_length,
+                num_task=num_tasks,
+                identical=False,
+                WT=WT_sim,
+                WS=WS_sim,
+                VT=VT_sim,
+                VS=VS_sim,
+                V_norm=v_norm,
+                w_noise = w_noise,
+                v_noise = v_noise)
 
-        joblib.dump({'nid': ode_solver.history},
-                    os.path.join(log_folder, f'ode_{seed}.jl'))
+            sim.train(num_iter=nums_iter,
+                    update_frequency=update_frequency,
+                    lr={
+                        'lr_w': lr_ws[0],
+                        'lr_wc': lr_ws[1],
+                        'lr_vc': lr_v
+                    })
 
-        sim = solver.simple_hrl_solver.CurriculumCompositionalTaskSimulator(
-            input_dim=input_dim,
-            seq_len=seq_length,
-            num_task=num_tasks,
-            identical=False,
-            WT=WT_sim,
-            WS=WS_sim,
-            VT=VT_sim,
-            VS=VS_sim,
-            V_norm=v_norm)
-
-        sim.train(num_iter=nums_iter,
-                  update_frequency=update_frequency,
-                  lr={
-                      'lr_w': lr_ws[0],
-                      'lr_wc': lr_ws[1],
-                      'lr_vc': lr_v
-                  })
-
-        joblib.dump({'nid': sim.history},
-                    os.path.join(log_folder, f'sim_{seed}.jl'))
+            joblib.dump({'nid': sim.history},
+                        os.path.join(log_folder, f'sim_{seed}.jl'))
 
 
 if __name__ == '__main__':
@@ -122,7 +126,7 @@ if __name__ == '__main__':
     parser.add_argument("--input-dim", type=int, default=1000)
     parser.add_argument("--num-tasks", type=int, default=4)
     parser.add_argument("--seq-length", type=int, default=4)
-    parser.add_argument("--vt-weights", help='initial VT', type=str)
+    parser.add_argument("--vt", help='initial VT', type=str)
     parser.add_argument("--noise-scale", type=float, help='added noise to VT')
 
     ##Training parameters
@@ -134,12 +138,16 @@ if __name__ == '__main__':
     parser.add_argument("--logdir", type=str, default='../hrl_ode_matrix')
     parser.add_argument("--seeds", type=int, default=1)
     parser.add_argument("--v-norm", type=int, default=1)
+    parser.add_argument("--w-noise", type=float, default=0.0)
+    parser.add_argument("--v-noise", type=float, default=0.0)
+    parser.add_argument("--ode", type=int, default=1)
+    parser.add_argument("--sim", type=int, default=1)
 
     args = vars(parser.parse_args())
 
     args['nums_iter'] = _helper_list_input(args, 'nums_iter', int)
     args['lr_ws'] = _helper_list_input(args, 'lr_ws', float)
-    args['vt_weights'] = _helper_list_input(args, 'vt_weights', float)
+    args['vt'] = _helper_list_input(args, 'vt', float)
     args['vs'] = _helper_list_input(args, 'vs', float)
 
     main(**args, args=args)

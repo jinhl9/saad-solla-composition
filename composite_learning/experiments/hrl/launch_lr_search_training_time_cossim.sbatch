@@ -14,8 +14,8 @@
 
 ##The arguments are in order of ${input_dim} ${num_tasks} ${seq_length} ${v_angle} ${max_iters} ${lr_ws} ${lr_v} ${logdir} ${seeds}
 
-echo experiments/hrl/training_time.py --input-dim ${1} --num-tasks ${2} --seq-length ${3} --vs ${4} --vt ${5} --w-angle ${6} --max-iters ${7}\
+echo experiments/hrl/training_time_vcossim.py --input-dim ${1} --num-tasks ${2} --seq-length ${3} --cossim ${4} --vt ${5} --w-angle ${6} --max-iters ${7}\
  --lr-w1 ${8} --lr-w2 ${9} --lr-v ${10} --logdir ${11} --seeds ${12} --simulation ${13} --ode ${14}
 
-python experiments/hrl/training_time.py --input-dim ${1} --num-tasks ${2} --seq-length ${3} --vs ${4} --vt ${5} --w-angle ${6} --max-iters ${7}\
+python experiments/hrl/training_time_vcossim.py --input-dim ${1} --num-tasks ${2} --seq-length ${3} --cossim ${4} --vt ${5} --w-angle ${6} --max-iters ${7}\
  --lr-w1 ${8} --lr-w2 ${9} --lr-v ${10} --logdir ${11} --seeds ${12} --simulation ${13} --ode ${14}
