@@ -4,6 +4,7 @@ from typing import Union
 import numpy as np
 import data
 import solver.ode as ode
+from utils.functions import *
 
 sqrt2pi = np.sqrt(2 * np.pi)
 
@@ -48,16 +49,12 @@ class BaseSimulator():
 class MultipleRLPerceptronSimulator(BaseSimulator):
     num_task: int
     identical: bool
+    input_corr:float =None
+    noise: float = 0.0
 
     def setup_train(self):
         self.lr_w = self.lr['lr_w']
-        self.WT = np.random.normal(loc=0.0,
-                                   scale=1.0,
-                                   size=(self.num_task, self.input_dim))
-        self.WT /= np.sqrt((np.sum(self.WT @ self.WT.T)) / self.input_dim)
-        self.WS = np.random.normal(loc=0.0,
-                                   scale=1.0,
-                                   size=(self.num_task, self.input_dim))
+        pass
 
     def setup_history(self, num_update):
         self.history = {
@@ -76,16 +73,25 @@ class MultipleRLPerceptronSimulator(BaseSimulator):
         self.history['P'][history_index] = P
 
     def step(self):
-        if self.identical:
-            x = np.random.normal(loc=0.0,
-                                 scale=1.0,
-                                 size=(1, self.input_dim, self.seq_len))
-            x = np.repeat(x, self.num_task, axis=0)
-        else:
+        if self.input_corr is not None:
+            
             x = np.random.normal(loc=0.0,
                                  scale=1.0,
                                  size=(self.num_task, self.input_dim,
                                        self.seq_len))
+            for i in range(self.seq_len):
+                x[1,:,i]=control_VS(x[0,:,i].squeeze(), np.arccos(self.input_corr), positive = False)*np.sqrt(self.input_dim)
+        else:
+            if self.identical:
+                x = np.random.normal(loc=0.0,
+                                    scale=1.0,
+                                    size=(1, self.input_dim, self.seq_len))
+                x = np.repeat(x, self.num_task, axis=0)
+            else:
+                x = np.random.normal(loc=0.0,
+                                    scale=1.0,
+                                    size=(self.num_task, self.input_dim,
+                                        self.seq_len))
 
         y, y_sign, y_hat, y_hat_sign = self.inference(x)
 
@@ -93,7 +99,7 @@ class MultipleRLPerceptronSimulator(BaseSimulator):
             if (y_sign[k] == y_hat_sign[k]).all():
                 dW = (1 / np.sqrt(self.input_dim) * y_sign[k] *
                       x[k]).mean(axis=-1)
-                self.WS[k] += self.lr_w * dW
+                self.WS[k] += self.lr_w * np.random.normal(loc = dW, scale=np.ones_like(dW)*self.noise, size = self.WS[k].shape)
                 self.WS[k] = np.divide(self.WS[k] * np.sqrt(self.input_dim),
                                        np.linalg.norm(self.WS[k]))
 
@@ -105,16 +111,44 @@ class MultipleRLPerceptronSimulator(BaseSimulator):
 
         return y, y_sign, y_hat, y_hat_sign
 
+@dataclass
+class MultipleCorrRLPerceptronSimulator(MultipleRLPerceptronSimulator):
+    def step(self, task_id):
+
+        x = np.random.normal(loc=0.0,
+                                scale=1.0,
+                                size=(self.input_dim,
+                                    self.seq_len))
+
+        y, y_sign, y_hat, y_hat_sign = self.inference(x, task_id)
+
+        
+        if (y_sign == y_hat_sign).all():
+            dW = (1 / np.sqrt(self.input_dim) * y_sign *
+                    x).mean(axis=-1)
+            self.WS[task_id] += self.lr_w * np.random.normal(loc = dW, scale=np.ones_like(dW)*self.noise, size = self.WS[task_id].shape)
+            self.WS[task_id] = np.divide(self.WS[task_id] * np.sqrt(self.input_dim),
+                                    np.linalg.norm(self.WS[task_id]))
+    def inference(self, x, task_id):
+        y = self.WT[task_id] @ x / np.sqrt(self.input_dim)
+        y_hat = self.WS[task_id] @ x / np.sqrt(self.input_dim)
+        y_sign = np.sign(y)
+        y_hat_sign = np.sign(y_hat)
+
+        return y, y_sign, y_hat, y_hat_sign
 
 @dataclass
 class CompositionalTaskSimulator(BaseSimulator):
     num_task: int
     identical: bool
+    input_corr: Union[None,float] = None
     WT: Union[None, np.array] = None
     WS: Union[None, np.array] = None
     VT: Union[None, np.array] = None
     VS: Union[None, np.array] = None
     V_norm: int = 0
+    w_noise: float = 0.0
+    v_noise: float = 0.0
 
     def setup_train(self):
         self.lr_wc = self.lr['lr_wc']
@@ -232,17 +266,29 @@ class CompositionalTaskSimulator(BaseSimulator):
 
     def step(self):
 
-        if self.identical:
-            x = np.random.normal(loc=0.0,
-                                 scale=1.0,
-                                 size=(1, self.input_dim, self.seq_len))
-            x = np.repeat(x, self.num_task, axis=0)
-        else:
+        if self.input_corr is not None:
+            
             x = np.random.normal(loc=0.0,
                                  scale=1.0,
                                  size=(self.num_task, self.input_dim,
                                        self.seq_len))
+            for i in range(self.seq_len):
+                x[1,:,i]=control_VS(x[0,:,i].squeeze(), np.arccos(self.input_corr), positive = False)*np.sqrt(self.input_dim)
+        
+        else:
 
+            if self.identical:
+                x = np.random.normal(loc=0.0,
+                                    scale=1.0,
+                                    size=(1, self.input_dim, self.seq_len))
+                x = np.repeat(x, self.num_task, axis=0)
+            else:
+                x = np.random.normal(loc=0.0,
+                                    scale=1.0,
+                                    size=(self.num_task, self.input_dim,
+                                        self.seq_len))
+                
+        
         (y, y_sign, y_hat,
          y_hat_sign), (y_tilde, y_tilde_hat, y_tilde_sign,
                        y_tilde_hat_sign) = self.inference(x)  #num_task*n_seq
@@ -250,8 +296,8 @@ class CompositionalTaskSimulator(BaseSimulator):
             dW = (1 / np.sqrt(self.input_dim) * y_tilde_hat_sign[:, None].T *
                   self.VS[:, None] * x.swapaxes(0, 1)).mean(axis=-1).T
             dV = (1 / self.input_dim * y_hat * y_tilde_hat_sign).mean(axis=-1)
-            self.WS += self.lr_wc * dW
-            self.VS += self.lr_vc * dV
+            self.WS += self.lr_wc *np.random.normal(loc = dW, scale = np.ones_like(dW) * self.w_noise, size = np.array(self.WS.shape).T)
+            self.VS += self.lr_vc * np.random.normal(loc = dV, scale = np.ones_like(dV)*self.v_noise, size = self.VS.shape )
             if self.V_norm != 0:
                 self.VS *= np.sqrt(self.num_task) / np.linalg.norm(self.VS)
             else:
@@ -284,38 +330,74 @@ class CompositionalTaskSimulator(BaseSimulator):
 class CurriculumCompositionalTaskSimulator(CompositionalTaskSimulator):
     num_task: int
     identical: bool
+    input_corr: Union[None,float] = None
+    order_matter: bool  = False
     WT: Union[None, np.array] = None
     WS: Union[None, np.array] = None
     VT: Union[None, np.array] = None
     VS: Union[None, np.array] = None
     V_norm: int = 0
+    w_noise: float = 0.0
+    v_noise: float = 0.0
 
     def __post_init__(self):
-        self.multipleRLPerceptron = MultipleRLPerceptronSimulator(
-            self.input_dim, self.seq_len, self.num_task, self.identical)
+        if self.order_matter:
+            self.multipleRLPerceptron = MultipleCorrRLPerceptronSimulator(
+                self.input_dim, self.seq_len, self.num_task, self.identical,self.w_noise
+            )
+        else:
+            self.multipleRLPerceptron = MultipleRLPerceptronSimulator(
+                self.input_dim, self.seq_len, self.num_task, self.identical, self.w_noise)
+            
+        self.checkpoint = {k:{'WS':[], 'VS':[]} for k in ['pretrain', 'composite']}
 
     def pretrain_step(self):
         return self.multipleRLPerceptron.step()
+    
+    def pretrain_step_task_k(self, task_id):
+        return self.multipleRLPerceptron.step(task_id)
+    
+    def do_checkpoint(self, phase):
+        
+        self.checkpoint[phase]['WS'].append(self.WS.copy())
+        self.checkpoint[phase]['VS'].append(self.VS.copy())
 
-    def train(self, num_iter, update_frequency, lr):
-        self.lr = lr
-        self.setup_history(num_update=sum(num_iter) // update_frequency)
-        self.setup_train()
+    def train(self, num_iter, update_frequency, checkpoint_frequency, lr, setup = True):
+        if setup:
+            self.lr = lr
+            pretrain_per_task_iter = num_iter[0] // update_frequency 
+            compositional_iter = num_iter[1] // update_frequency 
+            if self.order_matter:
+                self.setup_history(num_update = pretrain_per_task_iter * self.num_task + compositional_iter)
+            else:
+                self.setup_history(num_update = pretrain_per_task_iter + compositional_iter)
+            self.setup_train()
 
         self.multipleRLPerceptron.WS = self.WS
         self.multipleRLPerceptron.WT = self.WT
         self.multipleRLPerceptron.lr_w = self.lr['lr_w']
-
-        for i in range(num_iter[0]):
-            self.pretrain_step()
-            if i % update_frequency == 0:
-                self.update_history(history_index=i // update_frequency)
+        if self.order_matter:
+            for k in range(self.num_task):
+                for i in range(num_iter[0]):
+                    self.pretrain_step_task_k(k)
+                    if i % update_frequency == 0:
+                        self.update_history(history_index= i // update_frequency + k * pretrain_per_task_iter)
+                    if not checkpoint_frequency is None and i % checkpoint_frequency ==0:
+                        self.do_checkpoint(phase = 'pretrain')
+        else:
+            for i in range(num_iter[0]):
+                self.pretrain_step()
+                if i % update_frequency == 0:
+                    self.update_history(history_index=i // update_frequency)
+                if not checkpoint_frequency is None and i % checkpoint_frequency ==0:
+                        self.do_checkpoint(phase = 'pretrain')
 
         for i in range(num_iter[1]):
             self.step()
             if i % update_frequency == 0:
-                self.update_history(history_index=(num_iter[0] + i) //
-                                    update_frequency)
+                self.update_history(history_index= -compositional_iter + i//update_frequency)
+            if not checkpoint_frequency is None and i % checkpoint_frequency ==0:
+                        self.do_checkpoint(phase = 'composite')
 
 
 class HRLODESolver(ode.ODESolver):
@@ -326,8 +408,8 @@ class HRLODESolver(ode.ODESolver):
         super().__init__()
         self.num_task = len(VS)
         self.seq_length = seq_length
-        self.VS = VS
-        self.VT = VT
+        self.VS = VS / np.linalg.norm(VS)
+        self.VT = VT / np.linalg.norm(VT)
         self.N = N
         self.lr_w1 = lr_ws[0]
         self.lr_w2 = lr_ws[1]
@@ -335,9 +417,10 @@ class HRLODESolver(ode.ODESolver):
         self.WS = WS
         self.WT = WT
         self.V_norm = V_norm
-
-        for w in self.WT:
-            w /= np.sqrt(w @ w.T / self.N)
+        self.VT 
+        if self.WT is not None:
+            for w in self.WT:
+                w /= np.sqrt(w @ w.T / self.N)
 
     def _setup_history(self, num_update):
         self.history = {
@@ -372,12 +455,12 @@ class HRLODESolver(ode.ODESolver):
             self.S = self.WT @ self.WT.T / self.N
 
         else:
+            self.Q = np.zeros(shape=(self.num_task, self.num_task))
+            self.R = np.zeros(shape=(self.num_task, self.num_task))
+            self.S = np.zeros(shape=(self.num_task, self.num_task))
             for i in range(self.num_task):
-                self.Q = np.zeros(shape=(self.num_task, self.num_task))
-                self.R = np.zeros(shape=(self.num_task, self.num_task))
-                self.S = np.zeros(shape=(self.num_task, self.num_task))
-                self.Q[i][i] += 1.
-                self.S[i][i] += 1.
+                self.Q[i,i] = 1.
+                self.S[i,i] = 1.
 
     def train(self, nums_iter: List[int], update_frequency: int):
         self.update_frequency = update_frequency
@@ -434,10 +517,14 @@ class HRLODESolver(ode.ODESolver):
         if DV is not None:
             dV = DV
         else:
-            dV = self.lr_v / sqrt2pi / self.N * np.power(
+            
+            dV= self.lr_v / sqrt2pi / self.N * np.power(
                 self.P_tilde, self.seq_length -
                 1) * (self.VS * np.diag(self.Q) / self.norm_student +
                       self.VT * np.diag(self.R) / self.norm_teacher)
+            
+            #dV = self.lr_v/sqrt2pi/self.N * np.power(self.P_tilde, self.seq_length-1)*(self.VT*np.diag(self.R)-self.VS*self.overlap)
+        
         if DR is not None:
             dR = DR
         else:
@@ -457,16 +544,23 @@ class HRLODESolver(ode.ODESolver):
                 self.P_tilde, self.seq_length) / self.seq_length / self.N * (
                     self.VS[:, None] @ self.VS[:, None].T)
 
+
         temp_VS += dV
+        
+        
         if self.V_norm != 0:
             temp_VS *= np.sqrt(self.num_task) / np.linalg.norm(temp_VS)
         else:
             temp_VS /= np.linalg.norm(temp_VS)
+        
         temp_R += np.diag(np.diag(dR))
         temp_Q += np.diag(np.diag(dQ))
         temp_R /= np.sqrt(np.abs(temp_Q))
         temp_Q /= temp_Q
-
+        """
+        dR = self.lr_w2/sqrt2pi/self.N*self.VS*self.VT*(1-np.diag(self.R)**2)*np.power(self.P_tilde, self.seq_length-1) - self.lr_w2/2/self.N/self.seq_length*self.VS*self.VS*np.power(self.P_tilde, self.seq_length)
+        temp_R += dR
+        """
         self.VS = temp_VS
         self.Q = temp_Q
         self.R = temp_R
