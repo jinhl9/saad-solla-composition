@@ -26,3 +26,10 @@ class PartitionedEnsemble(base.BaseEnsemble):
     def _forward(self, network_index: int, x: torch.Tensor) -> torch.Tensor:
         x = self._process_input(x, network_index)
         return self._networks[network_index](x)
+
+
+@dataclass
+class SharedEnsemble(base.SharedEnsembleBase):
+
+    def _process_input(self, x):
+        return x
